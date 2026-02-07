@@ -1,0 +1,42 @@
+services:
+  # Redis (The Broker)
+  redis:
+    image: redis:alpine
+    container_name: vortex-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - vortex-net
+
+  # GO (The Gateway)
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: vortex-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - REDIS_ADDR=redis:6379
+    depends_on:
+      - redis
+    networks:
+      - vortex-net
+
+  # Python (The Worker)
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: vortex-worker
+    environment:
+      - REDIS_HOST=redis
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - redis
+    networks:
+      - vortex-net
+
+networks:
+  vortex-net:
+    driver: bridge
