@@ -17,15 +17,15 @@ The system is designed to handle **burst traffic** without dropping requests.
 
 ```mermaid
 graph LR
-    Client[Client / Frontend] -->|POST /ingest (JSON)| Gateway
+    Client["Client / Frontend"] -- "POST /ingest (JSON)" --> Gateway
     subgraph "High-Speed Ingestion Layer"
-        Gateway[Go API Gateway (Fiber)]
+        Gateway["Go API Gateway (Fiber)"]
     end
-    Gateway -->|LPUSH (Instant)| Redis[Redis Queue]
+    Gateway -- "LPUSH (Instant)" --> Redis["Redis Queue"]
     subgraph "Async Processing Layer"
-        Redis -->|BRPOP (Blocking)| Worker[Python AI Worker]
-        Worker -->|Generate Embeddings| OpenAI
-        Worker -->|Upsert Vectors| VectorDB[(Vector Store)]
+        Redis -- "BRPOP (Blocking)" --> Worker["Python AI Worker"]
+        Worker -- "Generate Embeddings" --> OpenAI
+        Worker -- "Upsert Vectors" --> VectorDB[("Vector Store")]
     end
 
 ```
