@@ -1,4 +1,5 @@
 import os
+import uuid
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
@@ -95,7 +96,9 @@ def ingest_books():
 
                 points = []
                 for j, text in enumerate(texts):
-                    point_id = f"{filename}_chunk_{i+j}"
+                    unique_string = f"{filename}_chunk_{i+j}"
+                    point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, unique_string))
+
                     clean_text = text.replace("\x00", "").strip()
 
                     payload = meta.copy()
