@@ -38,7 +38,7 @@ LIBRARY_MAP = {
 }
 
 
-def inest_books():
+def ingest_books():
     print(f"[*] Connecting to Qdrant at {settings.QDRANT_HOST}:{settings.QDRANT_PORT}...")
 
     client = QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
@@ -50,7 +50,10 @@ def inest_books():
             vectors_config=models.VectorParams(size=1536, distance=models.Distance.COSINE)
         )
 
-    embeddings = OpenAIEmbeddings(models="text-embedding-3-small", api_key=settings.OPENAI_API_KEY)
+    if not settings.OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY not set.")
+    # The embedding fails if I ever changet he model (1536 = 1536)
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=settings.OPENAI_API_KEY)
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
@@ -76,9 +79,12 @@ def inest_books():
 
         try:
             loader = PyPDFLoader(file_path)
+            
             pages = loader.load()
+            print(f"     -> Loaded {len(pages)} pages.")
 
             chunks = splitter.split_documents(pages)
+            print(f"     -> Created {len(chunks)} chunks.")
 
             batch_size = 50
             for i in range(0, len(chunks), batch_size):
@@ -89,7 +95,7 @@ def inest_books():
 
                 points = []
                 for j, text in enumerate(texts):
-                    point_id = hash(f"{meta['title']}_{i+j}")
+                    point_id = f"{filename}_chunk_{i+j}"
                     clean_text = text.replace("\x00", "").strip()
 
                     payload = meta.copy()

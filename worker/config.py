@@ -1,7 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSetting):
+class Settings(BaseSettings):
     # Required Variables
     OPENAI_API_KEY: str
 
