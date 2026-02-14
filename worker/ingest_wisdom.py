@@ -111,6 +111,7 @@ def ingest_books():
                         payload=payload
                     ))
 
+                # Update or insert, so if the uuid is already present the data is only overwritten
                 client.upsert(collection_name=settings.COLLECTION_WISDOM, points=points)
                 print(f"     -> Batch {i//batch_size + 1} indexed.")
             
