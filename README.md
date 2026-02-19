@@ -1,7 +1,8 @@
 # MarketPulse Engine: High-Throughput Financial Intelligence
 
-> **The Technical Challenge:** Standard RAG applications are synchronous. If a user uploads 50 documents (e.g., 10-K filings), the web server hangs while waiting for embeddings, leading to timeouts (504 Errors) and crashes under load.
-> **The Solution:** MarketPulse is an **Asynchronous RAG Engine**. It separates ingestion from processing using a **Go** gateway and **Redis** buffer, allowing it to ingest massive financial datasets instantly while a **Python** brain processes them in the background.
+> **The Technical Challenge:** Standard RAG applications are synchronous. If a user uploads 50 documents (e.g., 10-K filings) or connects a live news feed, the web server hangs while waiting for embeddings, leading to timeouts (504 Errors) and crashes under load.
+> 
+> **The Solution:** MarketPulse is an **Asynchronous RAG Engine**. It separates ingestion from processing using a **Go** microservices architecture and a **Redis** buffer, allowing it to ingest massive financial datasets instantly while a **Python** brain processes them in the background.
 
 ---
 
@@ -12,7 +13,8 @@ The system is designed to handle **burst traffic** (like Earnings Season) withou
 ```mermaid
 graph LR
     subgraph "High-Speed Ingestion Layer"
-        Client["Client / Feed"] -- "POST /ingest (JSON)" --> Gateway["Go API Gateway"]
+        Producer["Go Feed Producer"] -- "Concurrent Poll" --> RSS[Live RSS Feeds]
+        Producer -- "POST /ingest (JSON)" --> Gateway["Go API Gateway"]
     end
     Gateway -- "LPUSH (Instant)" --> Redis["Redis Queue"]
     
@@ -28,6 +30,7 @@ graph LR
 
 | Service | Tech Stack | Role | Why this tech? |
 | --- | --- | --- | --- |
+| **The Producer** | **Go (Goroutines)** | Aggregation | Polls dozens of financial feeds simultaneously. Far more efficient than a synchronous Python loop. |
 | **The Gateway** | **Go (Fiber)** | Ingestion | Handles 10k+ concurrent requests/sec. Eliminates the "GIL" bottleneck of Python servers. |
 | **The Buffer** | **Redis** | Message Queue | Acts as a "Shock Absorber." If OpenAI latency spikes, the queue grows, but the server stays up. |
 | **The Brain** | **Python 3.12** | Semantic Processing | Uses `uv` for fast dependency management. Handles the complex financial logic (Chunking/Embedding). |
@@ -41,8 +44,8 @@ I applied this architecture to solve a critical problem in FinTech: **Informatio
 
 * **The Problem:** Financial analysts cannot process real-time news ("The Wire") and cross-reference it with deep fundamental strategy ("The Wisdom") without latency or hallucination.
 * **The Implementation:**
-* **The Wire:** The Go Gateway ingests live RSS/News feeds instantly.
-* **The Wisdom:** The Python Worker indexes static PDFs (e.g., *The Intelligent Investor*).
+* **The Wire:** A dedicated Go service constantly polls live RSS/News feeds and fires them at the Gateway.
+* **The Wisdom:** A Python pipeline indexes static PDFs (e.g., *The Intelligent Investor*).
 * **The Result:** A system that can answer: *"Based on Benjamin Graham's principles, how should I react to today's inflation news?"*
 
 
@@ -51,6 +54,7 @@ I applied this architecture to solve a critical problem in FinTech: **Informatio
 
 ## 🚀 Key Features
 
+* **Goroutine Concurrency:** Replaced standard Python pollers with Go microservices to fetch market data in parallel.
 * **Non-Blocking I/O:** The Go Gateway acknowledges data receipt in microseconds (`202 Accepted`), preventing client timeouts during large file uploads.
 * **Metadata Passporting:** Every document is tagged with `region` (US/India) and `topic`. The AI knows not to apply US Tax Law to Indian Stocks.
 * **Smart Chunking:** Uses context-aware splitters (RecursiveCharacter) to keep financial concepts intact across page breaks.
@@ -68,68 +72,62 @@ I applied this architecture to solve a critical problem in FinTech: **Informatio
 ### Installation
 
 1. **Clone the repository**
+
 ```bash
-git clone https://github.com/onslaught7/market-pulse-engine.git
+git clone [https://github.com/onslaught7/market-pulse-engine.git](https://github.com/onslaught7/market-pulse-engine.git)
 cd market-pulse-engine
 
 ```
 
-
 2. **Set Environment Variables**
 Create a `.env` file in the root:
+
 ```env
 OPENAI_API_KEY=sk-your-key-here
-REDIS_HOST=redis
-QDRANT_HOST=qdrant
 
 ```
 
-
 3. **Launch the System**
+
 ```bash
 docker-compose up --build
 
 ```
 
-
-
 ---
 
 ## ⚡ Usage
 
-### 1. Ingest a Document (Simulate High Load)
+### 1. Watch "The Wire" in Action
 
-Send a request to the Go Gateway. It will respond instantly, proving the async architecture works.
+Once Docker Compose is running, the **Go Producer** automatically starts fetching live financial news and hitting the Gateway. Watch the logs:
 
 ```bash
-curl -X POST http://localhost:8080/ingest \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "analyst_01",
-    "document_id": "report_2024_Q3",
-    "content": "Inflation remains sticky at 6%...",
-    "metadata": {"region": "global", "type": "news"}
-  }'
+docker logs -f vortex-producer
 
 ```
 
 **Response:**
 
-```json
-{
-  "status": "accepted",
-  "task_id": "job-550e8400-e29b",
-  "queue_depth": 1
-}
+```text
+[*] Starting Go Feed Producer (The Wire)...
+--- Polling 3 Feeds ---
+ [v] Sent: Bitcoin rallies to new highs...
+ [v] Sent: S&P 500 futures dip ahead of...
 
 ```
 
 ### 2. Check the Worker Logs
 
-The Python worker picks up the task asynchronously:
+The Python worker picks up the tasks from Redis asynchronously:
+
+```bash
+docker logs -f vortex-worker
+
+```
 
 ```text
-[Worker] Processing report_2024_Q3...
+[Worker] Processing news_2024...
 [Worker] Type: 'news' | Region: 'global'
 [Worker] Indexed in 'wire' collection. Time: 0.4s
 
@@ -139,8 +137,8 @@ The Python worker picks up the task asynchronously:
 
 ## 🧠 Engineering Decisions
 
-**Why Go for Ingestion?**
-Python's GIL bottlenecks under high-concurrency HTTP loads. When processing 100+ concurrent PDF uploads, standard Python servers often crash or time out. Go handles these connections with goroutines using a fraction of the RAM.
+**Why separate the Producer and Gateway into two Go services?**
+Separation of Concerns. The Gateway should be a "dumb" highly-available pipe that just accepts data and queues it. The Producer handles the messy logic of XML parsing and external HTTP timeouts. If a news site goes down and hangs the Producer, the Gateway stays perfectly healthy to accept manual uploads.
 
 **Why Qdrant instead of Pinecone?**
 We need **Metadata Filtering** ("Show me only Indian stocks") to prevent the AI from hallucinating across markets. Qdrant's payload filtering is blazing fast and runs locally in Docker, allowing for a fully self-hosted stack.
@@ -150,3 +148,7 @@ We need **Metadata Filtering** ("Show me only Indian stocks") to prevent the AI 
 ## 📜 License
 
 MIT
+
+```
+
+---
