@@ -51,6 +51,20 @@ services:
     networks:
       - vortex-net
 
+  producer:
+    build:
+      context: ./producer
+      dockerfile: Dockerfile
+    container_name: vortex-producer
+    environment:
+      - GATEWAY_URL=http://gateway:8080/ingest
+      - POLL_INTERVAL_SEC=60
+    depends_on:
+      - gateway
+    networks:
+      - vortex-net
+
+
 networks:
   vortex-net:
     driver: bridge
