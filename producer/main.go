@@ -2,24 +2,25 @@ package main
 
 import (
 	"bytes"
-	"encoding"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
-	"time"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mmcdole/gofeed"
 	"github.com/joho/godotenv"
+	"github.com/mmcdole/gofeed"
 )
 
-// Load env variables
-gatewayURL := os.Getenv("GATEWAY_URL")
-pollInterval := os.Getenv("POLL_INTERVAL")
+// Package-level vars (loaded in main after godotenv)
+var (
+	gatewayURL   string
+	pollInterval time.Duration
+)
 
 // RSS Feeds (The Wires)
 var RSSFeeds = map[string]string{
@@ -30,29 +31,32 @@ var RSSFeeds = map[string]string{
 
 // Match payload with the Gateway's expected JSON schema
 type Payload struct {
-	UserID string `json:"user_id"`
-	DocumentID string `json:"document_id"`
-	Content string `json:"content"`
-	Metadata map[string]string `json:"metadata"`
+	UserID     string            `json:"user_id"`
+	DocumentID string            `json:"document_id"`
+	Content    string            `json:"content"`
+	Metadata   map[string]string `json:"metadata"`
 }
 
 func main() {
 	fmt.Println("[*] Starting Go Feed Producer (The Wire)")
 
+	// Load .env file (optional — won't error if missing in Docker)
+	_ = godotenv.Load()
+
 	// --- Configuration Loader ---
+	gatewayURL = os.Getenv("GATEWAY_URL")
 	if gatewayURL == "" {
 		gatewayURL = "http://gateway:8080/ingest"
-		fmt.Printf(" [!] GATEWAY_URL not set. Defaulting to %\n, gatewayURL")
+		fmt.Printf(" [!] GATEWAY_URL not set. Defaulting to %s\n", gatewayURL)
 	}
 
-	defaultpollIntervalStr := 60
 	pollInterval = 60 * time.Second
-	if pollIntervalStr != "" {
+	if pollIntervalStr := os.Getenv("POLL_INTERVAL"); pollIntervalStr != "" {
 		sec, err := strconv.Atoi(pollIntervalStr)
 		if err == nil {
 			pollInterval = time.Duration(sec) * time.Second
 		} else {
-			fmt.Printf(" [!] Invalid POLL_INTERVAL_SEC. Defaulting to 60s\n")
+			fmt.Printf(" [!] Invalid POLL_INTERVAL. Defaulting to 60s\n")
 		}
 	}
 
@@ -62,22 +66,22 @@ func main() {
 		fmt.Printf("\n--- Polling %d RSS Feeds Concurrently ---\n", len(RSSFeeds))
 
 		var wg sync.WaitGroup
-		
+
 		for source, url := range RSSFeeds {
 			wg.Add(1)
-			go fetchAndPush(fp, source, url, gatewayURL,&wg)
+			go fetchAndPush(fp, source, url, gatewayURL, &wg)
 		}
 
 		wg.Wait()
 
 		fmt.Printf("[*] Cycle complete. Sleeping for %v...\n", pollInterval)
 		time.Sleep(pollInterval)
-	}	
+	}
 }
 
-// Pass gatewayURl into the worker function
+// Pass gatewayURL into the worker function
 func fetchAndPush(fp *gofeed.Parser, source string, url string, gatewayURL string, wg *sync.WaitGroup) {
-	defer wg.Done() 
+	defer wg.Done()
 
 	feed, err := fp.ParseURL(url)
 	if err != nil {
@@ -103,7 +107,7 @@ func fetchAndPush(fp *gofeed.Parser, source string, url string, gatewayURL strin
 				"url":       item.Link,
 				"published": item.Published,
 				"type":      "news",
-				"region":    "global", 
+				"region":    "global",
 			},
 		}
 
@@ -120,7 +124,11 @@ func fetchAndPush(fp *gofeed.Parser, source string, url string, gatewayURL strin
 		defer resp.Body.Close()
 
 		if resp.StatusCode == 202 {
-			fmt.Printf(" [v] Sent (%s): %s...\n", source, item.Title[:40])
+			title := item.Title
+			if len(title) > 40 {
+				title = title[:40]
+			}
+			fmt.Printf(" [v] Sent (%s): %s...\n", source, title)
 		} else {
 			log.Printf(" [!] Gateway Error %d for %s", resp.StatusCode, source)
 		}

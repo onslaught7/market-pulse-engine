@@ -1,15 +1,19 @@
-# Build Stage
-FROM golang:1.21-alpine AS builder
+# -------- Build Stage --------
+FROM golang:1.25-alpine AS builder
 WORKDIR /app
-# Initialize the module
-RUN go mod init gateway
-RUN go get github.com/gofiber/fiber/v2
-RUN go get github.com/redis/go-redis/v9
+
+COPY go.mod go.sum ./
+RUN go mod download
+
 COPY . .
 RUN go build -o main .
 
-# Run Stage
-FROM alpine:latest
-WORKDIR /root/
+# -------- Run Stage --------
+FROM alpine:3.21
+RUN adduser -D appuser
+WORKDIR /home/appuser
+
+
 COPY --from=builder /app/main .
+USER appuser
 CMD ["./main"]
