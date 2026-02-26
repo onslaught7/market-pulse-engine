@@ -121,7 +121,6 @@ func fetchAndPush(fp *gofeed.Parser, source string, url string, gatewayURL strin
 			log.Printf("[!] Connection refused by Gateway for %s", source)
 			continue
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode == 202 {
 			title := item.Title
@@ -132,5 +131,7 @@ func fetchAndPush(fp *gofeed.Parser, source string, url string, gatewayURL strin
 		} else {
 			log.Printf(" [!] Gateway Error %d for %s", resp.StatusCode, source)
 		}
+
+		resp.Body.Close()
 	}
 }

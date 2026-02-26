@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"os"
 
@@ -9,12 +10,12 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-
 // Define the Data Contract we expect from the user
 type IngestRequest struct {
-	UserID string `json:"user_id"`
-	DocumentID string `json:"document_id"`
-	Content string `json:"content"`
+	UserID     string            `json:"user_id"`
+	DocumentID string            `json:"document_id"`
+	Content    string            `json:"content"`
+	Metadata   map[string]string `json:"metadata"`
 }
 
 var ctx = context.Background()
@@ -34,7 +35,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Could not connect to Redis: %v", err)
 	}
-	
+
 	app := fiber.New()
 
 	app.Post("/ingest", func(c *fiber.Ctx) error {
@@ -44,17 +45,28 @@ func main() {
 			return c.Status(400).JSON(fiber.Map{"error": "Invalid JSON"})
 		}
 
+		// Validate required fields
+		if payload.UserID == "" || payload.DocumentID == "" || payload.Content == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "Missing required fields"})
+		}
+
+		// Re-marshal clean payload (only contract fields reach Redis)
+		cleanJSON, err := json.Marshal(payload)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to process payload"})
+		}
+
 		// Push to Redis
-		err := rdb.LPush(ctx, "ingestion_queue", c.Body()).Err()
+		err = rdb.LPush(ctx, "ingestion_queue", cleanJSON).Err()
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Redis Queue Failed"})
 		}
 
 		// Response Instantly
 		return c.Status(202).JSON(fiber.Map{
-			"status": "accepted",
+			"status":  "accepted",
 			"message": "Document Queued for Processing",
-			"data": payload.DocumentID,
+			"data":    payload.DocumentID,
 		})
 	})
 
