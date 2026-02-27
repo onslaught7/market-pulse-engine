@@ -44,3 +44,16 @@ except Exception as e:
     raise ConnectionError("Failed to connect to OpenAI: {e}")
 
 
+# Ensure the Qdrant connection exists
+COLLECTION_WIRE = settings.COLLECTION_WIRE
+if not qdrant_client.collection_exists(COLLECTION_WIRE):
+    print(f" [!] Collection '{COLLECTION_WIRE}' not found. Creating...")
+    qdrant.create_collection(
+        collection_name=COLLECTION_WIRE,
+        vectors_config=models.VectorParams(size=1536, distance=models.Distance.COSINE)
+    )
+    print(f" [v] Collection '{COLLECTION_WIRE}' initialized.")
+
+
+def process_task(task_data):
+    pass
