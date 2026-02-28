@@ -108,3 +108,35 @@ def process_task(task_data):
 
     except Exception as e:
         print(f" [!] Failed to process vector for {doc_id}: {e}")
+
+
+def start_worker():
+    """
+    Continuously listen to the Redis queue and process incoming tasks.
+
+    Uses a blocking BRPOP call to fetch messages, decodes them from JSON,
+    and forwards them to `process_task()`. Designed to run indefinitely
+    with basic error handling for resilience.
+    """
+    queue_name = "ingestion_queue"
+    print(f" [*] Worker is LIVE. Listening to Redis queue: '{queue_name}'...")
+
+    while True:
+        try:
+            # BRPOP blocks indefinitely (timeout=0) until data arrives
+            # It return a tuple: (queue_name, message)
+            result = r.brpop(queue_name, timeout=0)
+
+            if result:
+                _, message = result
+                task_data = json.loads(message)
+                process_task(task_data)
+
+        except json.JSONDecodeError:
+            print(" [!] Error decoding JSON from Redis.")
+        except Exception as e:
+            time.sleep(2) # Prevent rapid crash loops on transient network drops
+
+if __name__ == "__main__":
+    time.sleep(2) # Give Redis a moment to stabilize on boot
+    start_worker()
