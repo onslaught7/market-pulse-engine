@@ -38,8 +38,8 @@ services:
   # 4. Python (The Worker)
   worker:
     build:
-      context: .
-      dockerfile: worker/Dockerfile
+      context: ./worker
+      dockerfile: Dockerfile
     container_name: vortex-worker
     environment:
       - REDIS_HOST=redis
@@ -68,8 +68,8 @@ services:
   # 6. FastAPI (The Query API)
   api:
     build:
-      context: .
-      dockerfile: api/Dockerfile
+      context: ./api
+      dockerfile: Dockerfile
     container_name: vortex-api
     ports:
       - "8000:8000"

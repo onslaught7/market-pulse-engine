@@ -1,0 +1,20 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    # Required
+    OPENAI_API_KEY: str
+
+    # Qdrant Connection
+    QDRANT_HOST: str = "localhost"
+    QDRANT_PORT: int = 6333
+
+    # Collections the API reads from
+    COLLECTION_WISDOM: str = "wisdom"
+    COLLECTION_WIRE: str = "wire"
+
+    # Load from .env for local development (Docker uses environment vars)
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+
+settings = Settings()

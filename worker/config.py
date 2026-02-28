@@ -2,20 +2,21 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # Required Variables
+    # Required
     OPENAI_API_KEY: str
 
-    # Optional Variables (With Defaults)
+    # Redis Connection
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
+
+    # Qdrant Connection
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
-    
-    # Collection Names (Hardcoded or Configurable)
-    COLLECTION_WISDOM: str = "wisdom"
+
+    # Collection the Worker writes to
     COLLECTION_WIRE: str = "wire"
-    
-    # Configuration to load from .env automatically
+
+    # Load from .env for local development (Docker uses environment vars)
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
