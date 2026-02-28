@@ -2,7 +2,7 @@ import json
 import time
 import redis
 from qdrant_client import QdrantClient
-from qdrant_client.models import models
+from qdrant_client import models
 from langchain_openai import OpenAIEmbeddings
 
 from config import settings
@@ -20,7 +20,7 @@ try:
     r.ping()
     print(" [v] Connected to Redis Buffer.")
 except Exception as e:
-    raise ConnectionError("Failed to connect to Redis: {e}")
+    raise ConnectionError(f"Failed to connect to Redis: {e}")
 
 
 # Initialize Qdrant
@@ -28,10 +28,11 @@ try:
     qdrant_client = QdrantClient(
         host=settings.QDRANT_HOST,
         port=settings.QDRANT_PORT,
-
     )
+    qdrant_client.get_collections()  # Force a real connection attempt
+    print(" [v] Connected to Qdrant.")
 except Exception as e:
-    raise ConnectionError("Failed to connect to Qdrant: {e}")
+    raise ConnectionError(f"Failed to connect to Qdrant: {e}")
 
 
 # Initialize OpenAI Embeddings
@@ -41,14 +42,14 @@ try:
         api_key=settings.OPENAI_API_KEY
     )
 except Exception as e:
-    raise ConnectionError("Failed to connect to OpenAI: {e}")
+    raise ConnectionError(f"Failed to connect to OpenAI: {e}")
 
 
 # Ensure the Qdrant connection exists
 COLLECTION_WIRE = settings.COLLECTION_WIRE
 if not qdrant_client.collection_exists(COLLECTION_WIRE):
     print(f" [!] Collection '{COLLECTION_WIRE}' not found. Creating...")
-    qdrant.create_collection(
+    qdrant_client.create_collection(
         collection_name=COLLECTION_WIRE,
         vectors_config=models.VectorParams(size=1536, distance=models.Distance.COSINE)
     )
@@ -73,7 +74,7 @@ def process_task(task_data):
     content = task_data.get("content")
     metadata = task_data.get("metadata", {})
 
-    if not content or not doc_id:
+    if not content or not doc_id or not user_id:
         print(" [!] Invalid payload received. Skipping.")
         return
 
@@ -135,7 +136,8 @@ def start_worker():
         except json.JSONDecodeError:
             print(" [!] Error decoding JSON from Redis.")
         except Exception as e:
-            time.sleep(2) # Prevent rapid crash loops on transient network drops
+            print(f" [!] Worker error: {e}")
+            time.sleep(2)  # Prevent rapid crash loops on transient network drops
 
 if __name__ == "__main__":
     time.sleep(2) # Give Redis a moment to stabilize on boot
