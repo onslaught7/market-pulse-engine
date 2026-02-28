@@ -38,19 +38,20 @@ services:
   # 4. Python (The Worker)
   worker:
     build:
-      context: ./worker
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: worker/Dockerfile
     container_name: vortex-worker
     environment:
       - REDIS_HOST=redis
-      - QDRANT_HOST=qdrant  # <--- Added this so worker finds DB
+      - QDRANT_HOST=qdrant
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     depends_on:
       - redis
-      - qdrant              # <--- Worker waits for DB to start
+      - qdrant
     networks:
       - vortex-net
 
+  # 5. Go (The Producer)
   producer:
     build:
       context: ./producer
@@ -64,6 +65,21 @@ services:
     networks:
       - vortex-net
 
+  # 6. FastAPI (The Query API)
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: vortex-api
+    ports:
+      - "8000:8000"
+    environment:
+      - QDRANT_HOST=qdrant
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - qdrant
+    networks:
+      - vortex-net
 
 networks:
   vortex-net:
