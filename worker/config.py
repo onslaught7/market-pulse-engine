@@ -13,7 +13,8 @@ class Settings(BaseSettings):
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
 
-    # Collection the Worker writes to
+    # Collection Names
+    COLLECTION_WISDOM: str = "wisdom"
     COLLECTION_WIRE: str = "wire"
 
     # Load from .env for local development (Docker uses environment vars)
