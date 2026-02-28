@@ -17,7 +17,8 @@ class Settings(BaseSettings):
     COLLECTION_WIRE: str = "wire"
 
     # Load from .env for local development (Docker uses environment vars)
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # extra="ignore": skip env vars meant for other services (e.g., GATEWAY_URL)
+    model_config = SettingsConfigDict(env_file="../.env", env_file_encoding="utf-8", extra="ignore")
 
 
 settings = Settings()

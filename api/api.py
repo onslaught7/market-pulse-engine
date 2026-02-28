@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from config import settings
 
 print("[*] Initializing MarketPulse Query Engine (The API)...")
