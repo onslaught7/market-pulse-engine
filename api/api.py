@@ -1,14 +1,25 @@
 import time
-from fastapi import FastAPI, HTTPException
+import json
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.callbacks import BaseCallbackHandler
 from config import settings
 
 print("[*] Initializing MarketPulse Query Engine (The API)...")
 
 app = FastAPI(title="MarketPulse Query Engine")
+
+# Allow frontend requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Initialize Qdrant
 try:
@@ -28,7 +39,7 @@ try:
 except Exception as e:
     raise ConnectionError(f"Failed to initialize OpenAI Embeddings: {e}")
 
-# Initialize GPT-4o-mini for synthesis
+# Initialize GPT-4o-mini for synthesis (non-streaming for REST)
 try:
     llm = ChatOpenAI(
         model="gpt-4o-mini",
@@ -38,6 +49,14 @@ try:
     print(" [v] GPT-4o-mini LLM initialized.")
 except Exception as e:
     raise ConnectionError(f"Failed to initialize LLM: {e}")
+
+# Streaming LLM instance for WebSocket
+llm_streaming = ChatOpenAI(
+    model="gpt-4o-mini",
+    api_key=settings.OPENAI_API_KEY,
+    temperature=0.2,
+    streaming=True
+)
 
 
 # Data Contract
@@ -150,6 +169,67 @@ def query_marketpulse(request: QueryRequest):
         "answer": response.content,
         "sources_scanned": sources_scanned
     }
+
+# --- WebSocket Endpoint for Streaming ---
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+    print(" [ws] Client connected.")
+
+    try:
+        while True:
+            data = await ws.receive_text()
+            payload = json.loads(data)
+            question = payload.get("question", "").strip()
+
+            if not question:
+                await ws.send_json({"type": "error", "detail": "Question cannot be empty."})
+                continue
+
+            print(f" [ws ->] Query: {question[:60]}...")
+            start_time = time.time()
+
+            try:
+                # Embed
+                question_vector = embeddings.embed_query(question)
+
+                # Search both collections
+                wisdom_results = qdrant_client.query_points(
+                    collection_name=settings.COLLECTION_WISDOM,
+                    query=question_vector,
+                    limit=3
+                ).points
+
+                wire_results = qdrant_client.query_points(
+                    collection_name=settings.COLLECTION_WIRE,
+                    query=question_vector,
+                    limit=3
+                ).points
+
+                wisdom_text = "\n".join([hit.payload.get("page_content", "") for hit in wisdom_results])
+                wire_text = "\n".join([hit.payload.get("page_content", "") for hit in wire_results])
+
+                # Stream LLM response token by token
+                chain = prompt_template | llm_streaming
+                async for chunk in chain.astream({
+                    "wisdom_context": wisdom_text,
+                    "wire_context": wire_text,
+                    "question": question
+                }):
+                    if chunk.content:
+                        await ws.send_json({"type": "token", "content": chunk.content})
+
+                sources_scanned = len(wisdom_results) + len(wire_results)
+                elapsed = time.time() - start_time
+                await ws.send_json({"type": "done", "sources_scanned": sources_scanned})
+                print(f" [ws v] Streamed in {elapsed:.2f}s | Sources: {sources_scanned}")
+
+            except Exception as e:
+                print(f" [ws !] Error: {e}")
+                await ws.send_json({"type": "error", "detail": str(e)})
+
+    except WebSocketDisconnect:
+        print(" [ws] Client disconnected.")
 
 
 if __name__ == "__main__":
