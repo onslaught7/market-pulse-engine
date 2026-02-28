@@ -89,7 +89,7 @@ func fetchAndPush(fp *gofeed.Parser, source string, url string, gatewayURL strin
 		return
 	}
 
-	limit := 3
+	limit := 30
 	if len(feed.Items) < limit {
 		limit = len(feed.Items)
 	}

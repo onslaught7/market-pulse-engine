@@ -10,7 +10,7 @@ services:
 
   # 2. Qdrant (The Vector Database)
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.16.1
     container_name: vortex-qdrant
     ports:
       - "6333:6333"

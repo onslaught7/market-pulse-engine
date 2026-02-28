@@ -105,22 +105,22 @@ def query_marketpulse(request: QueryRequest):
 
     # Step 2: Search the 'wisdom' collection (Top 3 results)
     try:
-        wisdom_results = qdrant_client.search(
+        wisdom_results = qdrant_client.query_points(
             collection_name=settings.COLLECTION_WISDOM,
-            query_vector=question_vector,
+            query=question_vector,
             limit=3
-        )
+        ).points
     except Exception as e:
         print(f" [!] Qdrant search failed on '{settings.COLLECTION_WISDOM}': {e}")
         raise HTTPException(status_code=502, detail="Failed to search historical knowledge base.")
 
     # Step 3: Search the 'wire' collection (Top 3 results)
     try:
-        wire_results = qdrant_client.search(
+        wire_results = qdrant_client.query_points(
             collection_name=settings.COLLECTION_WIRE,
-            query_vector=question_vector,
+            query=question_vector,
             limit=3
-        )
+        ).points
     except Exception as e:
         print(f" [!] Qdrant search failed on '{settings.COLLECTION_WIRE}': {e}")
         raise HTTPException(status_code=502, detail="Failed to search live news feed.")
