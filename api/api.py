@@ -44,6 +44,16 @@ except Exception as e:
 class QueryRequest(BaseModel):
     question: str
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"question": "What is the current sentiment around Bitcoin?"},
+                {"question": "Summarize the latest news on the S&P 500"},
+                {"question": "What are analysts saying about the Fed's interest rate decision?"},
+            ]
+        }
+    }
+
 
 # The Analyst Prompt
 SYSTEM_PROMPT = """You are an elite financial analyst. 
@@ -63,7 +73,19 @@ prompt_template = ChatPromptTemplate.from_template(SYSTEM_PROMPT)
 
 
 # API Endpoint
-@app.post("/query")
+@app.post(
+    "/query",
+    summary="Ask MarketPulse a financial question",
+    description=(
+        "Submit a natural-language question about markets, stocks, or crypto. "
+        "The engine searches both historical knowledge (Wisdom) and live news (The Wire), "
+        "then synthesizes an answer using LLM.\n\n"
+        "**Example questions to try:**\n"
+        "- *What is the current sentiment around Bitcoin?*\n"
+        "- *Summarize the latest news on the S&P 500*\n"
+        "- *What are analysts saying about the Fed's interest rate decision?*"
+    ),
+)
 def query_marketpulse(request: QueryRequest):
     question = request.question.strip()
 
