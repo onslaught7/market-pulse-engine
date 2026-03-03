@@ -1073,10 +1073,25 @@ c.Status(400).JSON(fiber.Map{"error": "Invalid JSON"})
 
 The chain works because `Status()` returns `*Ctx`, allowing you to call another method on it.
 
+#### Validation and Sanitation (Re-marshaling)
+
+Before pushing to Redis, we validate the parsed data and re-serialize it.
+
+```go
+// Validate required fields
+if payload.UserID == "" || payload.DocumentID == "" || payload.Content == "" {
+    return c.Status(400).JSON(fiber.Map{"error": "Missing required fields"})
+}
+
+cleanJSON, err := json.Marshal(payload)
+```
+
+Why do this? If a user sends malicious extra fields in their JSON, `c.Body()` would pass them straight to Redis. By decoding into our strongly-typed `IngestRequest` struct and then re-encoding (`json.Marshal`), we discard anything outside our data contract.
+
 #### Pushing to Redis: `LPush` and `.Err()`
 
 ```go
-err := rdb.LPush(ctx, "ingestion_queue", c.Body()).Err()
+err = rdb.LPush(ctx, "ingestion_queue", cleanJSON).Err()
 
 ```
 
@@ -1084,7 +1099,7 @@ Breaking this chain:
 
 | Part | Does |
 | --- | --- |
-| `rdb.LPush(ctx, "ingestion_queue", c.Body())` | Creates an LPUSH command (left-push to list) |
+| `rdb.LPush(ctx, "ingestion_queue", cleanJSON)` | Creates an LPUSH command (left-push to list) using the sanitized JSON |
 | `.Err()` | Executes it and returns **only** the error (ignoring the result) |
 
 Why `.Err()` instead of `.Result()`?
@@ -1181,83 +1196,47 @@ if __name__ == "__main__":
 
 The Dockerfile uses a **Multi-Stage Build** to keep the final image tiny.
 
-### Stage 1: The Builder (Lines 1-9)
+### Stage 1: The Builder
 
 ```dockerfile
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 ```
 
 * **`AS builder`**: We name this stage "builder". It's like a temporary scratchpad.
-* **`golang:1.21-alpine`**: This is a large image (300MB+) that contains the Go Compiler, tools, and libraries needed to build the code.
+* **`golang:1.25-alpine`**: This is a large image (300MB+) that contains the Go Compiler, tools, and libraries needed to build the code.
 
 ```dockerfile
 WORKDIR /app
-RUN go mod init gateway
 
-```
+COPY go.mod go.sum ./
+RUN go mod download
 
-* **`go mod init gateway`**: This is like `npm init` or `poetry init`.
-* It creates a `go.mod` file (Go's version of `package.json`).
-* It tells Go: "This project is named `gateway`".
-* Any libraries (like Fiber/Redis) we download will be tracked in this file.
-
-
-
-```dockerfile
-RUN go get github.com/gofiber/fiber/v2
-RUN go get github.com/redis/go-redis/v9
 COPY . .
 RUN go build -o main .
 
 ```
 
+* **Dependency Caching**: By copying only `go.mod` and `go.sum` first and running `go mod download`, we cache the dependencies in a dedicated Docker layer. If only our source code changes, Docker won't redownload all the libraries, saving time.
 * **Compile**: We run `go build`. This takes our human-readable Go code and turns it into a single binary file named `main`.
 
-### Stage 2: The Final Image (Lines 11-15)
+### Stage 2: The Final Image
 
 ```dockerfile
-FROM alpine:latest
+FROM alpine:3.21
+RUN adduser -D appuser
+WORKDIR /home/appuser
 
-```
-
-* **Fresh Start**: We start over with a brand new, empty image. `alpine` is tiny (5MB). It does NOT have Go installed. It's just a minimal Linux.
-
-### The "Teleportation" Trick (Your Questions Answered)
-
-#### Question 1: "Why is the file `/app/main`?"
-
-You have to trace the history in **Stage 1**:
-
-1. **Line 3:** `WORKDIR /app`
-* This command said: "Docker, please `cd` into the folder `/app`."
-* Everything we do after this line happens inside `/app`.
-
-
-2. **Line 9:** `RUN go build -o main .`
-* This command said: "Go compiler, build my code and name the output file `main`."
-* Because we were already standing in `/app`, the file was created at `/app/main`.
-* That is why we copy from `/app/main`. It physically exists there because we put it there.
-
-
-
-#### Question 2: "What is `WORKDIR /root/`?"
-
-* **Simple Answer:** It is the "Home Folder" for the Administrator user in Linux.
-* **Windows Analogy:** It is exactly like `C:\Users\Administrator\`.
-* **Why use it?**
-* When you start a fresh Linux image (`alpine`), you are essentially standing in `C:\` (the root `/`).
-* It is messy and bad practice to just drop your files in the top-level drive.
-* So, we `cd` into the home folder (`/root/`) to keep things tidy. It's just a standard, safe place to put your single binary.
-
-
-
-```dockerfile
+COPY --from=builder /app/main .
+USER appuser
 CMD ["./main"]
 
 ```
 
-* **Run**: When the container starts, it just moves into `/root/` and executes the binary.
+* **Fresh Start**: We start over with a brand new, empty image. `alpine:3.21` is tiny (5MB). It does NOT have Go installed. It's just a minimal Linux.
+* **Security via `appuser`**: Running containers as the `root` user is a security risk. If a hacker breaches the container, they’d have administrative privileges. By creating (`adduser -D appuser`) and switching over to a non-root user (`USER appuser`), we limit the damage potential to within `/home/appuser`.
+* **The "Teleportation" Trick**: The line `COPY --from=builder /app/main .` grabs the compiled binary `main` from the first stage (`builder` which had Go installed) and drops it into our tiny alpine image. 
+* **Run**: When the container starts, it executes `./main` as the unprivileged `appuser`.
 
 ### Summary
 
@@ -1273,24 +1252,28 @@ This is the "brain" of the system—the component that does the actual AI work. 
 
 ---
 
-### 11.1. The Import Block (Lines 1-4)
+### 11.1. The Import Block
 
 ```python
-import os
 import json
 import time
 import redis
+from qdrant_client import QdrantClient
+from qdrant_client import models
+from langchain_openai import OpenAIEmbeddings
 
+from config import settings
 ```
 
 | Module | Purpose |
 | --- | --- |
-| `os` | Access environment variables (`REDIS_HOST`) |
-| `json` | Parse the JSON messages from the queue |
-| `time` | `time.sleep()` for simulating API latency |
-| `redis` | The `redis-py` library for connecting to Redis |
+| `json`, `time` | Standard parsing of queue data and timeouts |
+| `redis` | The `redis-py` library for pulling tasks from the broker |
+| `qdrant_client` | SDK to interface with Qdrant vector database |
+| `langchain_openai` | To construct numerical vector embeddings using OpenAI's wrapper |
+| `config` | Shared pydantic-settings config file |
 
-> **Note:** The `redis` package is not part of Python's standard library. It must be installed via `pip install redis` (or in our case, listed in `requirements.txt`).
+> **Note:** External packages must be managed via our package manager (uv lockfile environment).
 
 ---
 
@@ -1332,53 +1315,63 @@ Unlike Go's `redis.NewClient(&redis.Options{...})`, Python uses keyword argument
 
 ---
 
-### 11.3. The Processing Function (Lines 13-26)
+### 11.3. The Processing Function
 
 ```python
 def process_task(task_data):
     """
-    Simulates the AI work (Embedding Generation)
+    Process a single ingestion task from Redis and index it into Qdrant.
+    ...
     """
-    user_id = task_data.get("user_id", "unknown")
-    doc_id = task_data.get("document_id", "unknown")
-    
-    print(f" [x] Processing {doc_id} for User {user_id}...")
-    
-    # SIMULATION: This is where you would call openai.Embedding.create()
-    # We sleep for 2 seconds to simulate the API latency
-    time.sleep(2) 
-    
-    print(f" [v] Done: {doc_id} vector stored.")
+    # Extract the Data contract fields as we receive from GO
+    user_id = task_data.get("user_id")
+    doc_id = task_data.get("document_id")
+    content = task_data.get("content")
+    metadata = task_data.get("metadata", {})
+
+    if not content or not doc_id or not user_id:
+        print(" [!] Invalid payload received. Skipping.")
+        return
+
+    # Convert the content into vector embeddings and add to Qdrant with metadata
+    try:
+        vector = embeddings.embed_query(content)
+
+        qdrant_payload = {
+            "page_content": content,
+            **metadata
+        }
+
+        # Upsert handles both insert and update (save to qdrant)
+        qdrant_client.upsert(
+            collection_name=COLLECTION_WIRE,
+            points=[
+                models.PointStruct(
+                    id=doc_id,
+                    vector=vector,
+                    payload=qdrant_payload
+                )
+            ]
+        )
+    except Exception as e:
+        print(f" [!] Failed to process vector for {doc_id}: {e}")
 
 ```
 
-#### Docstrings: `"""..."""`
-
-The triple-quoted string immediately after `def` is a **docstring**—documentation that describes what the function does. It can be accessed programmatically via `process_task.__doc__`.
-
-#### `task_data.get("user_id", "unknown")`
+#### `task_data.get("user_id")` vs dict access
 
 This is safer than `task_data["user_id"]` because:
 
 | Method | If Key Exists | If Key Missing |
 | --- | --- | --- |
-| `dict["key"]` | Returns value | **Raises `KeyError**` |
-| `dict.get("key", default)` | Returns value | Returns `default` |
+| `dict["key"]` | Returns value | **Raises `KeyError**` (crashes program) |
+| `dict.get("key")` | Returns value | Returns `None` |
 
-#### `time.sleep(2)`
+#### The Real AI Work (Vector Generating & Upsert)
 
-Pauses execution for 2 seconds. This simulates the time an actual OpenAI API call would take.
+This is no longer a simulation! We actually generate numerical arrays (vectors) that represent the meaning of `content` utilizing OpenAI's `text-embedding-3-small` model.
 
-**In production**, you would replace this with:
-
-```python
-response = openai.Embedding.create(
-    model="text-embedding-ada-002",
-    input=task_data["content"]
-)
-# Then save response.data[0].embedding to your vector database
-
-```
+`**metadata` syntax uses dictionary unpacking to merge the incoming metadata fields onto our Qdrant vector payload alongside the `page_content`. Finally, `qdrant_client.upsert` inserts the embedding and its context data into the vector database. We use an explicit ID (`id=doc_id`) so that running ingestion twice safely overwrites the same document (makes it idempotent).
 
 ---
 
@@ -1540,173 +1533,102 @@ This Dockerfile showcases modern Python containerization practices, using **uv**
 
 ---
 
-### 12.1. The Base Image (Lines 1-2)
+### 12.1. The Base Image
 
 ```dockerfile
 # 1. Base Image
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 ```
 
 | Tag Part | Meaning |
 | --- | --- |
 | `python` | Official Python Docker image |
-| `3.11` | Python version (matches our development environment) |
+| `3.12` | Python version (matches our development environment) |
 | `-slim` | A smaller variant (~150MB vs ~900MB for full image) |
 
 **Why not `alpine`?**
 
-* **Go loves alpine** because Go compiles to a static binary with no dependencies
-* **Python on alpine is problematic**: Alpine uses `musl` libc instead of `glibc`, which breaks many Python packages (especially those with C extensions like NumPy, pandas)
-* `-slim` (Debian-based) is the sweet spot: smaller than full, but fully compatible
+* **Go loves alpine** because Go compiles to a static binary with no dependencies.
+* **Python on alpine is problematic**: Alpine uses `musl` libc instead of `glibc`, which breaks many Python packages (especially those with C extensions).
+* `-slim` (Debian-based) is the sweet spot: smaller than full, but fully compatible.
 
 ---
 
-### 12.2. Installing uv: The Multi-Stage Copy (Lines 4-5)
+### 12.2. Installing uv: The Multi-Stage Copy
 
 ```dockerfile
-# 2. Install uv (The "Senior" Move: Copy binary directly)
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# 2. Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
 ```
 
-This is a **multi-stage copy trick**—borrowing files from another image.
-
-#### What is `uv`?
-
-**uv** is a Rust-based Python package installer that is **10-100x faster** than pip.
-
-| Tool | Written In | Speed (install 100 packages) |
-| --- | --- | --- |
-| `pip` | Python | ~60 seconds |
-| `uv` | Rust | ~2 seconds |
-
-#### The Syntax Breakdown
-
-```dockerfile
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-
-```
-
-| Part | Meaning |
-| --- | --- |
-| `COPY --from=` | Copy files from a different image (not our current build) |
-| `ghcr.io/astral-sh/uv:latest` | The official uv Docker image from GitHub Container Registry |
-| `/uv /uvx` | Two binary files we're copying |
-| `/bin/` | Destination in our image (system bin directory) |
-
-**Why this is clever:** Instead of running `pip install uv` (slow), we just grab the pre-compiled binary directly. Zero installation overhead.
+This is a **multi-stage copy trick**—borrowing files from another image. Instead of running `pip install uv` (slow), we just grab the pre-compiled binary directly into our container's bin directory. Zero installation overhead. **uv** is a Rust-based Python package installer that is significantly faster than pip.
 
 ---
 
-### 12.3. Setting Up the Workspace (Lines 7-10)
+### 12.3. Setting Up the Workspace & Caching Dependencies
 
 ```dockerfile
 WORKDIR /app
 
-# 3. Copy dependencies
-COPY requirements.txt .
+# 3. Copy the definition files first (for Docker layer caching)
+COPY pyproject.toml uv.lock ./
 
+# 4. Install dependencies
+RUN uv sync --frozen --no-dev
 ```
 
-#### `WORKDIR /app`
+#### Layer Caching Magic
 
-Creates the `/app` directory and `cd`s into it. All subsequent commands run from here.
+We intentionally copy `pyproject.toml` and `uv.lock` first, completely separate from our source code like `worker.py`. 
+1. If our dependencies haven't changed, Docker uses its cached layer. 
+2. The expensive package installation step is completely skipped.
+3. Only the `COPY worker.py .` triggers later.
 
-#### `COPY requirements.txt .`
+#### Deterministic Dependency sync
 
-Copies the requirements file from our local machine into the container.
-
-**Why copy this separately before the code?**
-
-This leverages **Docker layer caching**:
-
-1. If `requirements.txt` hasn't changed, Docker uses the cached layer
-2. The expensive `pip install` step is skipped
-3. Only the final `COPY worker.py .` runs (which is instant)
-
-If we copied everything at once (`COPY . .`), any code change would invalidate the cache and re-run all package installations.
+The command `uv sync --frozen --no-dev` ensures rigorous isolation and exact replication:
+* `--frozen`: Ensures we use precisely the nested versions locked into `uv.lock`. If there is a mismatch with `pyproject.toml`, it fails the build, preventing unexpected changes.
+* `--no-dev`: Skips installing development dependencies (like formatters or linters) to keep the production image size down.
+* By using `sync`, it intrinsically sets up a rapid localized Virtual Environment (`.venv`) for these locked dependencies.
 
 ---
 
-### 12.4. Installing Dependencies (Lines 12-15)
+### 12.4. Copying Application Code and Environment Path
 
 ```dockerfile
-# 4. Install with uv
-# --system: Install into system python (no venv needed inside container)
-# --no-cache: Keep image small
-RUN uv pip install --system --no-cache -r requirements.txt
-
-```
-
-#### The Flags Explained
-
-| Flag | Purpose |
-| --- | --- |
-| `--system` | Install directly into the system Python (no virtual environment) |
-| `--no-cache` | Don't save downloaded packages (reduces image size) |
-| `-r requirements.txt` | Read dependencies from file |
-
-#### Why `--system`?
-
-Inside a Docker container, **you ARE the virtual environment**. The container is already isolated—there's no need for an additional venv layer. Using `--system` simplifies paths and avoids activation scripts.
-
----
-
-### 12.5. Copying Application Code (Lines 17-18)
-
-```dockerfile
-# 5. Copy Application Code
+# 5. Copy your application logic
 COPY worker.py .
+COPY config.py .
 
-```
-
-Copy our actual code last, so code changes don't invalidate the dependency cache.
-
----
-
-### 12.6. Runtime Configuration (Lines 20-23)
-
-```dockerfile
-# 6. Runtime Config
+# 6. Set Environment
+ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
+# 7. Run
 CMD ["python", "worker.py"]
-
 ```
 
+#### Pointing to the .venv Sandbox
+`ENV PATH="/app/.venv/bin:$PATH"` allows our generic `python` and commands to run directly out of the generated local `.venv` namespace rather than the host system site packages. 
+
 #### `ENV PYTHONUNBUFFERED=1`
-
-By default, Python buffers stdout/stderr for performance. In Docker, this means logs might not appear in real-time.
-
-| Setting | Behavior |
-| --- | --- |
-| `PYTHONUNBUFFERED=1` | Print logs immediately (no buffering) |
-| Not set | Logs may be delayed or lost if container crashes |
-
-This is critical for debugging—without it, you might miss the last few log lines before a crash.
+By default, Python buffers stdout/stderr for performance. In Docker, this means logs might not appear in real-time. Unbuffering prints logs immediately, which is critical for debugging—without it, you might miss the last few log lines before a container crash.
 
 #### `CMD ["python", "worker.py"]`
-
-This is the **exec form** (preferred) vs the shell form:
-
-| Form | Syntax | Signal Handling |
-| --- | --- | --- |
-| Exec (good) | `CMD ["python", "worker.py"]` | Python receives SIGTERM directly |
-| Shell (avoid) | `CMD python worker.py` | Shell receives signal, may not pass it to Python |
-
-The exec form ensures clean container shutdown when Docker sends stop signals.
+This is the **exec form** (preferred), rather than shell form (`CMD python worker.py`), ensuring clean container shutdown as it passes POSIX signals correctly straight to the Python interpreter rather than a shell wrapper.
 
 ---
 
-### 12.7. Summary: Gateway vs Worker Dockerfiles
+### 12.5. Summary: Gateway vs Worker Dockerfiles
 
 | Aspect | Gateway (Go) | Worker (Python) |
 | --- | --- | --- |
-| Base Image | `alpine:latest` (5MB) | `python:3.11-slim` (150MB) |
+| Base Image | `alpine:3.21` (5MB) | `python:3.12-slim` (150MB) |
 | Build Stage | Yes (multi-stage) | No (interpreted language) |
-| Package Manager | `go get` | `uv pip install` |
-| Final Binary | Single executable | Python script + interpreter |
+| Package Manager | `go mod download` | `uv sync` |
+| Final Binary | Single executable | Python script + virtual environment |
 | Final Image Size | ~15MB | ~200MB |
 
 **The trade-off:** Python images are larger because they include the interpreter and dependencies. Go compiles everything into a single static binary.
