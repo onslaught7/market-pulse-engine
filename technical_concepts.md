@@ -53,34 +53,45 @@ The README mentions a **Polyglot** architecture. This just means "speaking multi
 * **Why Python?** Python is the king of AI. All the best libraries (LangChain, OpenAI, PyTorch) are native to Python.
 * **Structure:** This worker runs in the background. It doesn't care about HTTP requests or users. It just stares at Redis waiting for work.
 
+### Component 4: The Wires (Producer)
+
+* **Tech:** **Go (Golang)**
+* **Role:** Automated data aggregation.
+* **Why Go?** The producer leverages Go's concurrency (`go worker()` patterns with `sync.WaitGroup`) to poll dozens of RSS feeds simultaneously without blocking.
+* **Structure:** Runs on a continuous loop (`time.Sleep()`), pulling fresh data from external financial sources, formatting it to our exact Data Contract, and pushing it to the Gateway's HTTP ingest endpoint.
+
+### Component 5: The Interface (Query API)
+
+* **Tech:** **Python 3.12** + **FastAPI**.
+* **Role:** Serving answers back to end-users and frontends.
+* **Why FastAPI?** Native async support and built-in websockets make it ideal for handling real-time, streaming AI generation (token-by-token).
+* **Structure:** A fully independent microservice that only talks to the VectorDB and OpenAI. Has both standard REST endpoints for slow AI generations and Websocket (`/ws`) endpoints for live streaming.
+
 ---
 
 ## 3. The Workflow Explained (The Mermaid Diagram)
 
-Let's trace a request through the system:
 
-1. **POST /ingest (The Trigger):**
-* The User sends a document (JSON) to the Go Gateway.
+Let's trace a complete lifecycle in the system:
 
+1. **The Poller (The Wires):** 
+* The Go Producer continually scrapes external RSS feeds. For every article found, it structures it as JSON and fires an HTTP POST request to the Gateway.
 
-2. **202 Accepted (The Handshake):**
+2. **POST /ingest (The Trigger):**
+* The Gateway (Doorman) receives the document.
+
+3. **202 Accepted (The Handshake):**
 * **Crucial Point:** The Gateway does *not* return `200 OK` with the result. It returns `202 Accepted`.
 * **Translation:** "I have received your request and it is valid. I have not finished it yet, but here is a Ticket ID (`task_id`) to check on it later."
 
+4. **LPUSH (The Handoff):**
+* The Gateway parses, validates, and serializes the data, pushing it to Redis. The Gateway's job is now done. It forgets about this request and handles the next one.
 
-3. **LPUSH (The Handoff):**
-* The Gateway serializes the data (turns it into a string) and pushes it to Redis. The Gateway's job is now done. It forgets about this request and handles the next one.
+5. **BRPOP (The Pickup):**
+* The Python Worker, which was idle, sees the new item in Redis and grabs it. It fetches LangChain embeddings from OpenAI and upserts the result into Qdrant.
 
-
-4. **BRPOP (The Pickup):**
-* The Python Worker, which was idle, sees the new item in Redis and grabs it.
-
-
-5. **Processing (The Heavy Lifting):**
-* The Worker calls OpenAI to generate **Embeddings** (lists of numbers that represent the *meaning* of the text).
-* It then saves these to the **Vector Database**.
-
-
+6. **The User Query (The API):**
+* Eventually, a user asks a question via the frontend (e.g. over a WebSocket). The FastAPI server intercepts this, converts the question to a vector embedding, searches Qdrant for matching historical logic, and streams the constructed AI answer back token-by-token.
 
 ---
 
