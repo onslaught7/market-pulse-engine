@@ -1,20 +1,28 @@
-# Build Stage
-FROM golang:1.25-alpine AS builder
-WORKDIR /app
+# Stage 1
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+
+WORKDIR /src
+RUN apk add --no-cache git
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go build -o main .
 
-# Run Stage
-FROM alpine:3.21
-RUN adduser -D appuser
-WORKDIR /home/appuser
+ENV CGO_ENABLED=0
 
-# Install root certificates so GO can make HTTPS requests to Yahoo/CoinDesk
-RUN apk add --no-cache ca-certificates
+RUN go build \
+    -ldflags="-s -w" \
+    -trimpath \
+    -o /app/main
+
+# Stage 2
+FROM gcr.io/distroless/base-debian12
+
+WORKDIR /app
+
 COPY --from=builder /app/main .
-USER appuser
+
+USER nonroot:nonroot
+
 CMD ["./main"]
