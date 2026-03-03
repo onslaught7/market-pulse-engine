@@ -24,6 +24,13 @@ graph LR
         Worker -- "Upsert w/ Metadata" --> Qdrant[("Qdrant Vector DB")]
     end
 
+    subgraph "Query Layer"
+        User["User / Frontend"] -- "REST or WebSocket" --> API["FastAPI Query Engine"]
+        API -- "Semantic Search" --> Qdrant
+        API -- "LLM Synthesis" --> OpenAI
+        API -- "Streamed Answer" --> User
+    end
+
 ```
 
 ### Core Components
@@ -31,9 +38,10 @@ graph LR
 | Service | Tech Stack | Role | Why this tech? |
 | --- | --- | --- | --- |
 | **The Producer** | **Go (Goroutines)** | Aggregation | Polls dozens of financial feeds simultaneously. Far more efficient than a synchronous Python loop. |
-| **The Gateway** | **Go (Fiber)** | Ingestion | Handles 10k+ concurrent requests/sec. Eliminates the "GIL" bottleneck of Python servers. |
+| **The Gateway** | **Go (Fiber)** | Ingestion | Handles 10k+ concurrent requests/sec. Validates and re-marshals payloads before queuing. Eliminates the "GIL" bottleneck of Python servers. |
 | **The Buffer** | **Redis** | Message Queue | Acts as a "Shock Absorber." If OpenAI latency spikes, the queue grows, but the server stays up. |
-| **The Brain** | **Python 3.12** | Semantic Processing | Uses `uv` for fast dependency management. Handles the complex financial logic (Chunking/Embedding). |
+| **The Brain** | **Python 3.12** | Semantic Processing | Uses `langchain_openai` to generate embeddings (`text-embedding-3-small`) and upserts vectors with metadata into Qdrant. |
+| **The Query API** | **Python (FastAPI)** | Intelligence Layer | Dual-collection RAG search (Wisdom + Wire). Supports REST (`POST /query`) and real-time **WebSocket streaming** (`/ws`) for token-by-token AI responses. |
 | **The Memory** | **Qdrant** | Vector Database | Stores vectors with **Metadata Passports** (Region, Topic) for surgical retrieval. |
 
 ---
@@ -56,6 +64,8 @@ I applied this architecture to solve a critical problem in FinTech: **Informatio
 
 * **Goroutine Concurrency:** Replaced standard Python pollers with Go microservices to fetch market data in parallel.
 * **Non-Blocking I/O:** The Go Gateway acknowledges data receipt in microseconds (`202 Accepted`), preventing client timeouts during large file uploads.
+* **Dual-Collection RAG:** Queries search both historical knowledge ("Wisdom") and live news ("The Wire") simultaneously, then synthesizes a combined answer.
+* **WebSocket Streaming:** The Query API streams LLM responses token-by-token over WebSockets for a real-time chat experience.
 * **Metadata Passporting:** Every document is tagged with `region` (US/India) and `topic`. The AI knows not to apply US Tax Law to Indian Stocks.
 * **Smart Chunking:** Uses context-aware splitters (RecursiveCharacter) to keep financial concepts intact across page breaks.
 * **Dockerized:** Entire stack spins up with a single compose command.
@@ -107,19 +117,17 @@ docker logs -f vortex-producer
 
 ```
 
-**Response:**
-
 ```text
-[*] Starting Go Feed Producer (The Wire)...
---- Polling 3 Feeds ---
- [v] Sent: Bitcoin rallies to new highs...
- [v] Sent: S&P 500 futures dip ahead of...
+[*] Starting Go Feed Producer (The Wire)
+--- Polling 3 RSS Feeds Concurrently ---
+ [v] Sent (yahoo_finance): Bitcoin rallies to new highs...
+ [v] Sent (coindesk): S&P 500 futures dip ahead of...
 
 ```
 
 ### 2. Check the Worker Logs
 
-The Python worker picks up the tasks from Redis asynchronously:
+The Python worker picks up the tasks from Redis and indexes them into Qdrant:
 
 ```bash
 docker logs -f vortex-worker
@@ -127,11 +135,46 @@ docker logs -f vortex-worker
 ```
 
 ```text
-[Worker] Processing news_2024...
-[Worker] Type: 'news' | Region: 'global'
-[Worker] Indexed in 'wire' collection. Time: 0.4s
+[*] Initializing AI Brain (The Worker)...
+ [v] Connected to Redis Buffer.
+ [v] Connected to Qdrant.
+ [->] Processing: yahoo_finance | ID: a1b2c3d4...
+ [v] Indexed in 0.38s.
 
 ```
+
+### 3. Query the System
+
+The FastAPI Query Engine is available at `http://localhost:8000`.
+
+**REST (full response):**
+
+```bash
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the current sentiment around Bitcoin?"}'
+
+```
+
+```json
+{
+  "question": "What is the current sentiment around Bitcoin?",
+  "answer": "Based on the latest news...",
+  "sources_scanned": 6
+}
+
+```
+
+**WebSocket (streaming, token-by-token):**
+
+Connect to `ws://localhost:8000/ws` and send:
+
+```json
+{"question": "Summarize the latest news on the S&P 500"}
+
+```
+
+You'll receive a stream of `{"type": "token", "content": "..."}` messages, followed by a final `{"type": "done", "sources_scanned": 6}`.
 
 ---
 
