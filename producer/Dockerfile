@@ -1,4 +1,4 @@
-# Stage 1
+# Build Stage
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
 WORKDIR /src
@@ -16,7 +16,7 @@ RUN go build \
     -trimpath \
     -o /app/main
 
-# Stage 2
+# Runtime Stage
 FROM gcr.io/distroless/base-debian12
 
 WORKDIR /app
