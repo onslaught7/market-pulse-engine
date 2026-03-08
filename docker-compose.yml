@@ -1,7 +1,7 @@
 services:
   # 1. Redis (The Broker)
   redis:
-    image: redis:alpine
+    image: redis:7.2-alpine
     container_name: vortex-redis
     ports:
       - "6379:6379"
@@ -96,6 +96,18 @@ services:
     networks:
       - vortex-net
 
+  # 7. Jaeger (The Tracing Dashboard)
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: vortex-jaeger
+    ports:
+      - "16686:16686" # The Visual Web UI
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+    networks:
+      - vortex-net
+
+      
 networks:
   vortex-net:
     driver: bridge
