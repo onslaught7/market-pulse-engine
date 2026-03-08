@@ -9,9 +9,34 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.callbacks import BaseCallbackHandler
 from config import settings
 
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.instrumentation.requests import RequestsInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
 print("[*] Initializing MarketPulse Query Engine (The API)...")
 
 app = FastAPI(title="MarketPulse Query Engine")
+
+RequestsInstrumentor().instrument()
+HTTPXClientInstrumentor().instrument()
+
+# Initialize OpenTelemetry
+resource = Resource(attributes={"service.name": "vortex-api"})
+provider = TracerProvider(resource=resource)
+
+otlp_exporter = OTLPSpanExporter(endpoint=settings.JAEGER_ENDPOINT)
+processor = BatchSpanProcessor(otlp_exporter)
+provider.add_span_processor(processor)
+
+trace.set_tracer_provider(provider)
+tracer = trace.get_tracer(__name__)
+
+FastAPIInstrumentor.instrument_app(app)
 
 # Allow frontend requests
 app.add_middleware(
