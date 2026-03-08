@@ -107,7 +107,17 @@ services:
     networks:
       - vortex-net
 
-      
+  # 8. Prometheus (The Metrics Scraper)
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: vortex-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - vortex-net
+
 networks:
   vortex-net:
     driver: bridge
