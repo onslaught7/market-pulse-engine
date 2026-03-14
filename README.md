@@ -8,7 +8,7 @@
 
 ## 🏗 Architecture
 
-The system is designed to handle **burst traffic** (like Earnings Season) without dropping requests.
+The system is designed to handle **burst traffic** (like Earnings Season) without dropping requests, heavily monitored by a dedicated observability stack.
 
 ```mermaid
 graph LR
@@ -31,6 +31,11 @@ graph LR
         API -- "Streamed Answer" --> User
     end
 
+    subgraph "Observability (The Panopticon)"
+        API -. "OTLP Traces" .-> Jaeger["Jaeger UI"]
+        API -. "Metrics Scrape" .-> Prometheus["Prometheus"]
+    end
+
 ```
 
 ### Core Components
@@ -40,9 +45,10 @@ graph LR
 | **The Producer** | **Go (Goroutines)** | Aggregation | Polls dozens of financial feeds simultaneously. Far more efficient than a synchronous Python loop. |
 | **The Gateway** | **Go (Fiber)** | Ingestion | Handles 10k+ concurrent requests/sec. Validates and re-marshals payloads before queuing. Eliminates the "GIL" bottleneck of Python servers. |
 | **The Buffer** | **Redis** | Message Queue | Acts as a "Shock Absorber." If OpenAI latency spikes, the queue grows, but the server stays up. |
-| **The Brain** | **Python 3.12** | Semantic Processing | Uses `langchain_openai` to generate embeddings (`text-embedding-3-small`) and upserts vectors with metadata into Qdrant. |
-| **The Query API** | **Python (FastAPI)** | Intelligence Layer | Dual-collection RAG search (Wisdom + Wire). Supports REST (`POST /query`) and real-time **WebSocket streaming** (`/ws`) for token-by-token AI responses. |
+| **The Brain** | **Python 3.12 (`uv`)** | Semantic Processing | Uses `langchain_openai` to generate embeddings (`text-embedding-3-small`) and upserts vectors with metadata into Qdrant. Containerized natively using Astral's `uv`. |
+| **The Query API** | **FastAPI + OTel** | Intelligence Layer | Dual-collection RAG search (Wisdom + Wire). Supports REST (`POST /query`) and real-time **WebSocket streaming** (`/ws`) for token-by-token AI responses. |
 | **The Memory** | **Qdrant** | Vector Database | Stores vectors with **Metadata Passports** (Region, Topic) for surgical retrieval. |
+| **The Panopticon** | **Jaeger & Prometheus** | Observability | Distributed tracing and metrics scraping to visualize LLM latency and network bottlenecks in real-time. |
 
 ---
 
@@ -54,9 +60,9 @@ I applied this architecture to solve a critical problem in FinTech: **Informatio
 * **The Implementation:**
 * **The Wire:** A dedicated Go service constantly polls live RSS/News feeds and fires them at the Gateway.
 * **The Wisdom:** A Python pipeline indexes static PDFs (e.g., *The Intelligent Investor*).
+
+
 * **The Result:** A system that can answer: *"Based on Benjamin Graham's principles, how should I react to today's inflation news?"*
-
-
 
 ---
 
@@ -68,7 +74,8 @@ I applied this architecture to solve a critical problem in FinTech: **Informatio
 * **WebSocket Streaming:** The Query API streams LLM responses token-by-token over WebSockets for a real-time chat experience.
 * **Metadata Passporting:** Every document is tagged with `region` (US/India) and `topic`. The AI knows not to apply US Tax Law to Indian Stocks.
 * **Smart Chunking:** Uses context-aware splitters (RecursiveCharacter) to keep financial concepts intact across page breaks.
-* **Dockerized:** Entire stack spins up with a single compose command.
+* **OpenTelemetry Tracing:** HTTP requests and outbound AI network calls are traced and visualized in Jaeger to audit token generation latency.
+* **Zero-Trust Python Builds:** Docker containers are built using `uv --frozen` for strict lockfile adherence and absolute build reproducibility.
 
 ---
 
@@ -100,7 +107,7 @@ OPENAI_API_KEY=sk-your-key-here
 3. **Launch the System**
 
 ```bash
-docker-compose up --build
+docker-compose up -d --build
 
 ```
 
@@ -176,6 +183,13 @@ Connect to `ws://localhost:8000/ws` and send:
 
 You'll receive a stream of `{"type": "token", "content": "..."}` messages, followed by a final `{"type": "done", "sources_scanned": 6}`.
 
+### 4. Audit the Panopticon (Observability)
+
+To view the distributed traces and system metrics:
+
+* **Jaeger Traces:** Navigate to `http://localhost:16686`. Select `vortex-api` to see millisecond-level breakdowns of OpenAI embedding calls and Qdrant database queries.
+* **Prometheus Metrics:** Navigate to `http://localhost:9090` to view system health and queue depths.
+
 ---
 
 ## 🧠 Engineering Decisions
@@ -186,6 +200,9 @@ Separation of Concerns. The Gateway should be a "dumb" highly-available pipe tha
 **Why Qdrant instead of Pinecone?**
 We need **Metadata Filtering** ("Show me only Indian stocks") to prevent the AI from hallucinating across markets. Qdrant's payload filtering is blazing fast and runs locally in Docker, allowing for a fully self-hosted stack.
 
+**Why instrument with OpenTelemetry instead of vendor-specific SDKs?**
+Vendor lock-in is a liability. By using the W3C OpenTelemetry standard, the engine can export traces to Jaeger locally, but can instantly be repointed to Datadog or New Relic in an enterprise environment without rewriting a single line of Python or Go.
+
 ---
 
 ## 📜 License
@@ -194,4 +211,10 @@ MIT
 
 ```
 
----
+***
+
+The context is restored, the documentation is uncompromised, and the new infrastructure is accurately represented. 
+
+Are we ready to pivot to `gateway/main.go` and start the Context Propagation Boss Fight?
+
+```
