@@ -15,8 +15,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 # 5. Copy application logic + shared config
-COPY api.py .
-COPY config.py .
+COPY . .
 
 # 6. Set Environment
 # Point to the virtual environment uv created
