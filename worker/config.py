@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     COLLECTION_WISDOM: str = "wisdom"
     COLLECTION_WIRE: str = "wire"
 
+    # Observability
+    JAEGER_ENDPOINT: str = "http://jaeger:4318/v1/traces"
+
     # Load from .env for local development (Docker uses environment vars)
     # extra="ignore": skip env vars meant for other services (e.g., GATEWAY_URL)
     model_config = SettingsConfigDict(env_file="../.env", env_file_encoding="utf-8", extra="ignore")
