@@ -7,7 +7,20 @@ tracer = trace.get_tracer(__name__)
 
 
 def process_task(task_data, embeddings, qdrant_client):
+    """
+    Process a single ingestion task from Redis and index it into Qdrant.
 
+    Extracts required fields from the payload, generates a semantic embedding
+    using OpenAI, and upserts the vector with metadata into the configured
+    Qdrant collection.
+
+    The document_id acts as a deterministic UUID to ensure idempotent writes.
+    Invalid payloads are skipped, and processing errors are logged without
+    crashing the worker.
+
+    OpenTelemetry spans are used to measure embedding latency and
+    Qdrant indexing performance.
+    """
     user_id = task_data.get("user_id")
     doc_id = task_data.get("document_id")
     content = task_data.get("content")

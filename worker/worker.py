@@ -39,7 +39,17 @@ embeddings = OpenAIEmbeddings(
 
 
 def start_worker():
+    """
+    Continuously listen to the Redis queue and process incoming tasks.
 
+    Uses a blocking BRPOP call to fetch messages from Redis. Each message
+    is decoded from JSON and forwarded to `process_task()`.
+
+    A Redis dequeue span is created using OpenTelemetry so queue wait
+    times can be visualized in Jaeger.
+
+    Designed to run indefinitely with basic error handling for resilience.
+    """
     queue_name = "ingestion_queue"
 
     print(f" [*] Worker is LIVE. Listening to Redis queue: '{queue_name}'...")

@@ -8,7 +8,15 @@ from config import settings
 
 
 def setup_telemetry():
+    """
+    Initialize OpenTelemetry tracing for the worker service.
 
+    Configures an OTLP exporter that sends trace data to the Jaeger
+    collector. The worker is registered as the service 'vortex-worker'
+    in the distributed tracing system.
+
+    Returns a tracer instance used throughout the worker runtime.
+    """
     resource = Resource(attributes={
         "service.name": "vortex-worker",
     })
