@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
@@ -22,6 +23,8 @@ type IngestRequest struct {
 // var ctx = context.Background()
 
 func main() {
+	ctx := context.Background()
+	
 	tp, err := initTracer("vortex-gateway")
 	if err != nil {
 		log.Fatalf("Failed to initialize tracer: %v", err)
