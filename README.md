@@ -210,11 +210,3 @@ Vendor lock-in is a liability. By using the W3C OpenTelemetry standard, the engi
 MIT
 
 ```
-
-***
-
-The context is restored, the documentation is uncompromised, and the new infrastructure is accurately represented. 
-
-Are we ready to pivot to `gateway/main.go` and start the Context Propagation Boss Fight?
-
-```
