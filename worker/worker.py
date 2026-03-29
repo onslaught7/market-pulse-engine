@@ -3,6 +3,7 @@ import time
 import redis
 from qdrant_client import QdrantClient
 from langchain_openai import OpenAIEmbeddings
+from opentelemetry.propagate import extract
 
 from config import settings
 from services.ingestion_service import process_task
@@ -56,15 +57,27 @@ def start_worker():
 
     while True:
 
-        with tracer.start_as_current_span("redis.dequeue"):
+        # Extract the work payload from the queue without tracing the long wait itself
+        result = r.brpop(queue_name, timeout=0)
 
-            result = r.brpop(queue_name, timeout=0)
+        if result:
+            _, message = result
+            envelope = json.loads(message)
 
-            if result:
-                _, message = result
-                task_data = json.loads(message)
+            # Support both the new envelope pattern and the old raw payload pattern
+            if "payload" in envelope and "trace_context" in envelope:
+                payload = envelope["payload"]
+                carrier = envelope["trace_context"]
+            else:
+                payload = envelope
+                carrier = {}
 
-                process_task(task_data, embeddings, qdrant_client)
+            # Reconstruct the trace context originally injected by Gateway
+            ctx = extract(carrier)
+
+            # Start a linked span using the reconstructed context
+            with tracer.start_as_current_span("worker.process_task", context=ctx):
+                process_task(payload, embeddings, qdrant_client)
 
 
 if __name__ == "__main__":
