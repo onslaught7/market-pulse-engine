@@ -3,7 +3,7 @@ import time
 import redis
 from qdrant_client import QdrantClient
 from langchain_openai import OpenAIEmbeddings
-from opentelemetry.propagate import extract
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from config import settings
 from services.ingestion_service import process_task
@@ -73,7 +73,7 @@ def start_worker():
                 carrier = {}
 
             # Reconstruct the trace context originally injected by Gateway
-            ctx = extract(carrier)
+            ctx = TraceContextTextMapPropagator().extract(carrier=carrier)
 
             # Start a linked span using the reconstructed context
             with tracer.start_as_current_span("worker.process_task", context=ctx):
