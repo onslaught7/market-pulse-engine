@@ -10,6 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // Define the Data Contract we expect from the user
@@ -20,6 +21,10 @@ type IngestRequest struct {
 	Metadata   map[string]string `json:"metadata"`
 }
 
+type RedisTask struct {
+	TraceContext map[string]string `json:"trace_context"`
+	Payload IngestRequest 		   `json:"payload"`
+}
 // var ctx = context.Background()
 
 func main() {
@@ -70,17 +75,30 @@ func main() {
 			return c.Status(400).JSON(fiber.Map{"error": "Missing required fields"})
 		}
 
-		// Re-marshal clean payload (only contract fields reach Redis)
-		cleanJSON, err := json.Marshal(payload)
-		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Failed to process payload"})
-		}
-
 		// Push to Redis
 		ctxRedis, redisSpan := tracer.Start(ctx, "redis.enqueue")
 		defer redisSpan.End()
 
-		err = rdb.LPush(ctxRedis, "ingestion_queue", cleanJSON).Err()
+		// 1. Create an empty map to hold the tracking numbers
+		carrier := make(propagation.MapCarrier)
+
+		// 2. Ask OpenTelemetry to inject the current TraceID from ctxRedis into our map
+		otel.GetTextMapPropagator().Inject(ctxRedis, carrier)
+
+		// 3. Wrap the business payload and the trace carrier 
+		task := RedisTask{
+			TraceContext: carrier,
+			Payload: *payload,
+		}
+
+		// 4. Marshal the newly wrapped envelope
+		taskJSON, err := json.Marshal(task)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to serialize task"})
+		}
+
+		// Push the envelop to Redis, not just the RAW payload
+		err = rdb.LPush(ctxRedis, "ingestion_queue", taskJSON).Err()
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Redis Queue Failed"})
 		}
